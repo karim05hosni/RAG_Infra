@@ -1,1 +1,1 @@
-from .postgres import get_conn
+from .postgres import get_conn, init_pool

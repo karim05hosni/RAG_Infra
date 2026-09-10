@@ -15,12 +15,14 @@ def validate_video_file(file_path):
     valid_extensions = ['.mp4', '.avi', '.mov', '.mkv']
     _, ext = os.path.splitext(file_path)
     if ext.lower() not in valid_extensions:
-        raise ValueError(f"Invalid file extension: {ext}. Supported extensions are: {valid_extensions}")
+        print(f"Invalid file extension: {ext}. Supported extensions are: {valid_extensions}")
+        return False
     # validate size
     max_size_mb = 300  # Maximum file size in MB
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
     if file_size_mb > max_size_mb:
-        raise ValueError(f"File size exceeds the maximum allowed size of {max_size_mb} MB.")
+        print(f"File size exceeds the maximum allowed size of {max_size_mb} MB.")
+        return False
     
     return True
 def read_pdf(file_path):
@@ -43,20 +45,6 @@ def read_txt(file_path):
     with open(file_path, "r", encoding="utf-8") as file:
         text = file.read()
     return text
-
-def read_corpus(file_path):
-    file_name, ext = os.path.splitext(file_path)
-    file_ext = ext.lower()
-    print(f"Reading corpus: {file_path} with extension: {file_ext}")
-    if file_ext == ".pdf":
-        return read_pdf(file_path)
-    if file_ext == ".docx":
-        return read_docx(file_path)
-    if file_ext == ".txt":
-        return read_txt(file_path)
-    if validate_video_file(file_path):
-        return transcribe_video(file_path)
-    return None
 
 def convert_video_to_mp3(input_file: str, output_file: str):
     # Construct the FFmpeg command as a list of strings
@@ -95,8 +83,8 @@ def transcribe_video(file_path, device="cpu", model_name="base", fp16=False):
         result = []
         for segment in segments:
             result.append({
-                "start": segment["start"],
-                "end": segment["end"],
+                "start_time": segment["start"],
+                "end_time": segment["end"],
                 "text": segment["text"]
             })
         return result

@@ -1,26 +1,26 @@
 import psycopg
 
-from clients import get_conn
-
-def insert_documents_chunks_trans(documents, chunks):
+from app.clients import get_conn
+from psycopg.types.json import Json
+def insert_sources_chunks_trans(sources, chunks):
     with get_conn() as conn:
         with conn.transaction() as trans:
             with conn.cursor() as cur:
                 try:
-                    for document in documents:
+                    for source in sources:
                         cur.execute(
-                            "INSERT INTO documents (doc_id, filename) VALUES (%s, %s) ON CONFLICT (doc_id) DO NOTHING",
-                            (document['doc_id'], document['filename'])
+                            "INSERT INTO sources (source_id, source_type, file_name, file_path) VALUES (%s, %s, %s, %s) ON CONFLICT (source_id) DO NOTHING",
+                            (source['source_id'], source['source_type'], source['filename'], source['file_path'])
                         )
                     for chunk in chunks:
                         cur.execute(
-                            "INSERT INTO chunks (chunk_id, doc_id, text) VALUES (%s, %s, %s) ON CONFLICT (chunk_id) DO NOTHING",
-                            (chunk['chunk_id'], chunk['doc_id'], chunk['text'])
+                            "INSERT INTO chunks (chunk_id, source_id, text, chunk_index, metadata, language) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (chunk_id) DO NOTHING",
+                            (chunk['chunk_id'], chunk['source_id'], chunk['text'], chunk['chunk_index'], Json(chunk['metadata']), chunk['language'])
                         )
                 except Exception as e:
                     print(f"Error occurred while inserting documents and chunks: {e}")
                     raise e
-                
+
 
 def text_search_ts_rank(query, top_k=20):
     print(f"Performing text search for query: '{query}' with top_k={top_k}")
@@ -61,3 +61,10 @@ def fetch_chunks_by_ids(chunk_ids):
             )
             rows = cur.fetchall()
     return rows
+
+def get_source_meta(doc_id):
+    with get_conn() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute("SELECT source_id, file_name FROM sources WHERE source_id = %s", (doc_id,))
+            row = cur.fetchone()
+    return row

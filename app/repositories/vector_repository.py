@@ -7,6 +7,7 @@ from qdrant_client.models import PointStruct, Modifier, VectorParams, SparseVect
 load_dotenv()  # Load environment variables from .env file
 # Connect to your local Docker container
 qdrant_client = QdrantClient(url=os.getenv('qdrant_url')) 
+collection_name = "my_rag"
 
 def delete_all_collections():
     collections = qdrant_client.get_collections().collections
@@ -15,7 +16,6 @@ def delete_all_collections():
         qdrant_client.delete_collection(collection.name)
 # delete_all_collections()
 
-collection_name = "my_rag"
 if not qdrant_client.collection_exists(collection_name):
     print(f"Creating collection '{collection_name}' with vector size 384 .")
     qdrant_client.create_collection(
@@ -39,12 +39,11 @@ def qdrant_search(query_vector, top_k=20):
 
 def add_to_qdrant(grouped_chunks):
     vector_size = len(grouped_chunks[0][0]['vector'])
-    collection_name = collection_name
     points = []
     print(f"Upserting {len(grouped_chunks)} groups of chunks to Qdrant.")
     for group in grouped_chunks:
         for chunk in group:
-            points.append(PointStruct(id=chunk['chunk_id'], vector=chunk['vector'], payload={"doc_id": chunk['doc_id'], "chunk_id": chunk['chunk_id']}))
+            points.append(PointStruct(id=chunk['chunk_id'], vector=chunk['vector'], payload={"source_id": chunk['source_id'], "chunk_id": chunk['chunk_id']}))
         # debug points byte size
         print(f"Debug: {len(points)} points to upsert.")
         qdrant_client.upsert(

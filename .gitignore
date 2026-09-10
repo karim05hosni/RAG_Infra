@@ -11,3 +11,4 @@ wheels/
 .env
 temp/
 *.mp4
+docs

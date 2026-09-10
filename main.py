@@ -1,22 +1,56 @@
 import os
+from typing import Annotated, List
 
+from contextlib import asynccontextmanager
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 from app.repositories import vector_repository
 from app.ingestion import transcribe_video
-app = FastAPI()
+from app.ingestion.service import ingest_files
+from app.clients.postgres import init_pool, close_pool, get_conn
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_pool()      # runs once when the app starts
+    yield
+    close_pool()      # runs once when the app shuts down
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get('/')
 def main():
     return {"message": "Hello from rag infra"}
 
-def agent(prompt: str):
-    return ''
+# gets documents inputs from http request and ingests them into the system
+@app.post("/ingest")
+def ingest_documents(language: str, files: Annotated[List[UploadFile], File()]):
+    try:
+        file_paths= []
+        for file in files:
+            # create doc id
+            doc_id = file.filename
+            # save file to docs
+            file_path = f"docs/{doc_id}"
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "wb") as f:
+                f.write(file.file.read())
+            file_paths.append(file_path)
+        # ingest files
+        print(f"Ingesting files: {file_paths} with language: {language}")
+        ingest_files(file_paths, language=language, chunk_size=10)
+        return {"message": f"Successfully ingested {len(file_paths)} documents."}
+    except Exception as e:
+        print(f"Error occurred while ingesting documents: {e}")
+        return {"error": "error accured while ingesting"}
+    finally:
+        for file_path in file_paths:
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
 
 if __name__ == "__main__":
