@@ -6,12 +6,12 @@ from app.shared import transformer
 
 def keywordSearch(query, language, use_bm25=False, use_ts_postgres=True):
     keyword_search_results = []
-    ts_rank = text_search_ts_rank(query, language)
+    ts_rank = text_search_ts_rank(query, language, 70)
     keyword_search_results = ts_rank
     return keyword_search_results
 
 def semantic_search(query_embedding, use_qdrant_sem_search=True):
-    qdrant_results = qdrant_search(query_embedding, top_k=50).points
+    qdrant_results = qdrant_search(query_embedding, top_k=70).points
     dot_product_scores: list[tuple[str, float]] = sorted([(result.payload['chunk_id'], result.score) for result in qdrant_results], key=lambda x: x[1], reverse=True)
     return dot_product_scores
 
@@ -22,7 +22,7 @@ def RRF(bm25_scores, dot_product_scores, k=60, w_bm25=1.0, w_sem=1.0):
         fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_bm25 / (k + i + 1)
     for i, (chunk_id, score) in enumerate(dot_product_scores):
         fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_sem / (k + i + 1)
-    return sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+    return sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)[:40]
 
 def hybrid_search(query: str, language: str, use_qdrant_sem_search=True, use_bm25=False, use_ts_postgres=True):
     query_embedding = transformer.embedding_model.encode(query, normalize_embeddings=True)

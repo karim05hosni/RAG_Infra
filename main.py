@@ -14,6 +14,7 @@ from app.ingestion import transcribe_video
 from app.ingestion.service import ingest_files
 from app.clients.postgres import init_pool, close_pool, get_conn
 from app.retrieval import keywordSearch, RRF, semantic_search, hybrid_search
+from app.agent import agent_loop
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Starting application...")
@@ -70,6 +71,11 @@ def search(query: str, language: str):
 @app.get("/format_qdrant_collections")
 def format_qdrant_collections():
     delete_all_collections()
+    
+    
+@app.get("/agent")
+def agent(prompt: str, max_iterations: int = 5):
+    return agent_loop(prompt, max_iterations=max_iterations)
 
 
 if __name__ == "__main__":
