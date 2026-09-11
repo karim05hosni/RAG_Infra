@@ -19,6 +19,8 @@ def read_document(file_path):
 def read_video(file_path):
     return transcribe_video(file_path)
 
+def prepare_text_context(source_title: str, text: str):
+    return f"From {source_title}: {text}"
 
 
 def ingest_files(file_paths, language, chunk_size=10):
@@ -53,7 +55,7 @@ def ingest_files(file_paths, language, chunk_size=10):
                 chunk_data = {
                     'chunk_id': generate_chunk_id(doc_id, i),
                     'source_id': doc_id,
-                    'text': chunk['text'],
+                    'text': prepare_text_context(file_name, chunk['text']),
                     'chunk_index': i,
                     'metadata': metadata,
                     'language': language
@@ -71,14 +73,14 @@ def ingest_files(file_paths, language, chunk_size=10):
                 chunk_data = {
                     'chunk_id': generate_chunk_id(doc_id, i),
                     'source_id': doc_id,
-                    'text': chunk,
+                    'text': prepare_text_context(file_name, chunk),
                     'chunk_index': i,
                     'metadata': {},
                     'language': language
                 }
                 all_chunks_meta.append(chunk_data)
 
-    all_chunks_text = [chunk['text'] for chunk in all_chunks_meta]
+    all_chunks_text = [prepare_text_context(file_name, chunk['text']) for chunk in all_chunks_meta]
 
     # stop if no chunks to ingest
     if not all_chunks_meta:

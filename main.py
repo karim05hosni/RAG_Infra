@@ -9,21 +9,28 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 from fastapi import FastAPI, File, UploadFile
-from app.repositories import vector_repository
+from app.repositories import delete_all_collections
 from app.ingestion import transcribe_video
 from app.ingestion.service import ingest_files
 from app.clients.postgres import init_pool, close_pool, get_conn
-
+from app.retrieval import keywordSearch, RRF, semantic_search, hybrid_search
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_pool()      # runs once when the app starts
+    print("Starting application...")
+    
+    init_pool()
+    print("Postgres pool initialized")
+
     yield
-    close_pool()      # runs once when the app shuts down
+
+    print("Closing application...")
+    close_pool()
 
 app = FastAPI(lifespan=lifespan)
 
 @app.get('/')
 def main():
+    print(">>> ENTERED /")
     return {"message": "Hello from rag infra"}
 
 # gets documents inputs from http request and ingests them into the system
@@ -45,12 +52,24 @@ def ingest_documents(language: str, files: Annotated[List[UploadFile], File()]):
         ingest_files(file_paths, language=language, chunk_size=10)
         return {"message": f"Successfully ingested {len(file_paths)} documents."}
     except Exception as e:
-        print(f"Error occurred while ingesting documents: {e}")
-        return {"error": "error accured while ingesting"}
+        raise e
     finally:
         for file_path in file_paths:
             if os.path.exists(file_path):
                 os.remove(file_path)
+
+@app.get("/search")
+def search(query: str, language: str):
+    try:
+        return hybrid_search(query, language)
+    except Exception as  e:
+        print(f"Error occurred while searching documents: {e}")
+        return {"error": "error accured while searching"}
+    
+
+@app.get("/format_qdrant_collections")
+def format_qdrant_collections():
+    delete_all_collections()
 
 
 if __name__ == "__main__":
