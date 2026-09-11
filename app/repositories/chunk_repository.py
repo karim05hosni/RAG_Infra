@@ -22,7 +22,8 @@ def insert_sources_chunks_trans(sources, chunks):
                     raise e
 
 
-def text_search_ts_rank(query, top_k=20):
+
+def text_search_ts_rank(query, language, top_k=20):
     print(f"Performing text search for query: '{query}' with top_k={top_k}")
     try:
         terms = query.split()
@@ -39,12 +40,12 @@ def text_search_ts_rank(query, top_k=20):
                 cur.execute(
                     """
                     SELECT chunk_id, ts_rank(text_search, query) AS score
-                    FROM chunks, websearch_to_tsquery('english', %s) AS query
+                    FROM chunks, websearch_to_tsquery(%s, %s) AS query
                     WHERE text_search @@ query
                     ORDER BY score DESC
                     LIMIT %s
                     """,
-                    (or_query, top_k)
+                    (language, or_query, top_k)
                 )
                 return cur.fetchall()
     except Exception as e:

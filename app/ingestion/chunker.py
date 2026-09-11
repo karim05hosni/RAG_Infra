@@ -22,7 +22,6 @@ def clean_bullet_points(text: str):
         cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
 
-
 def chunk_text(text, chunk_size=10):
     text = clean_bullet_points(text)
     sentences = text.replace('\n', ' ').split('. ')
