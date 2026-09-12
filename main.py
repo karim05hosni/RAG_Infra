@@ -2,13 +2,15 @@ import os
 from typing import Annotated, List
 
 from contextlib import asynccontextmanager
+
+import uvicorn
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from app.repositories import delete_all_collections
 from app.ingestion import transcribe_video
 from app.ingestion.service import ingest_files
@@ -74,9 +76,9 @@ def format_qdrant_collections():
     
     
 @app.get("/agent")
-def agent(prompt: str, max_iterations: int = 5):
-    return agent_loop(prompt, max_iterations=max_iterations)
-
+def agent(prompt: str, request: Request, max_iterations: int = 5):
+    client_ip = request.client.host
+    return agent_loop(prompt, max_iterations=max_iterations, IP_address=client_ip)
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host="127.0.0.1", port=8000)

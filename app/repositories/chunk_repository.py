@@ -34,18 +34,18 @@ def text_search_ts_rank(query, language, top_k=20):
         # "or" means OR, not the "|" operator (that belongs to to_tsquery,
         # a different function). Using "|" here was silently ignored/broken.
         or_query = " OR ".join(terms)
-
+        print(f"searching in language: {language} with query: {or_query}")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT chunk_id, ts_rank(text_search, query) AS score
                     FROM chunks, websearch_to_tsquery(%s, %s) AS query
-                    WHERE text_search @@ query
+                    WHERE text_search @@ query and language = %s
                     ORDER BY score DESC
                     LIMIT %s
                     """,
-                    (language, or_query, top_k)
+                    (language, or_query, language, top_k)
                 )
                 return cur.fetchall()
     except Exception as e:

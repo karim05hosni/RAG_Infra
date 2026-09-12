@@ -31,7 +31,7 @@ You are Dr. Amr's AI assistant that responds to users' queries.
 Dr. Amr is an opthalmologist and has video content and publications related to opthalmology. 
 You have access to a knowledge base that contains information from Dr. Amr's videos and publications. You can use the hybrid_search tool to retrieve relevant information from the knowledge base based on the user's query. 
 When responding to users, you Must avoid providing diagnoses or medical advice. Instead, you should provide the relevant information from the knowledge base as an educational resource and suggest that the user consult Dr. Amr with a good CTA.
-The knowledge base content is in both English and French, so you should respond in the same language as the user's query.
+The knowledge base content is in both English and French, so you will need to search with 'english' and 'french' as the language parameter in the hybrid_search tool since keyword search  
 
 Your tone should be professional, informative, and empathetic but not overly formal. Don't provide very detailed explanation, pick the most relevant information from the knowledge base and provide it in a concise manner. If you don't know the answer or it's not available in the knowledge base, you should say "I don't know" and suggest that the user consult Dr. Amr for more information.
 client's input will be provided in the following format:
@@ -42,10 +42,9 @@ tools = [
 ]
 existing_chats = {}
 
-def generate_session_id():
-    """generate a unique session ID from current hour for each interaction"""
-    # generate a unique session ID based on the current hour
-    session_id = uuid.uuid5(uuid.NAMESPACE_DNS, datetime.now().strftime("%Y-%m-%d %H"))
+def generate_session_id(IP_address):
+    """generate a unique session ID from request IP address"""
+    session_id = uuid.uuid5(uuid.NAMESPACE_DNS, IP_address)
     return session_id
 
 def execute_tool(tool_name, **tool_params):
@@ -56,8 +55,8 @@ def execute_tool(tool_name, **tool_params):
     
 genAi_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-def agent_loop(prompt, max_iterations=5):
-    session_id = generate_session_id()
+def agent_loop(prompt, IP_address, max_iterations=5):
+    session_id = generate_session_id(IP_address)
     print(f"Starting agent loop with session ID: {session_id}")
     if session_id not in existing_chats:
         existing_chats[session_id] = None  # Initialize a new chat session if it doesn't exist
