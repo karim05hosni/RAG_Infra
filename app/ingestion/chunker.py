@@ -47,9 +47,19 @@ def chunk_text(text, chunk_size=10):
 
     # Append any remaining text as a chunk
     if current_chunk:
+        # if smaller than chunk_size, we can still add it as a chunk
         chunks.append('. '.join(current_chunk))
-
+        
+        # if bigger than chunk_size, we can split it into smaller chunks
+        if current_size > chunk_size:
+            # print(f"Current chunk size {current_size} exceeds chunk size {chunk_size}. Splitting...")
+            split_chunks = []
+            for i in range(0, len(current_chunk), chunk_size):
+                split_chunks.append('. '.join(current_chunk[i:i + chunk_size]))
+            chunks[-1] = split_chunks[0]
+            chunks.extend(split_chunks[1:])
     return chunks
+
 def content_hash(text):
     return hash(text)
 

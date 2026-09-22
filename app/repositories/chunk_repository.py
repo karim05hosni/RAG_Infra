@@ -34,7 +34,6 @@ def text_search_ts_rank(query, language, top_k=20):
         # "or" means OR, not the "|" operator (that belongs to to_tsquery,
         # a different function). Using "|" here was silently ignored/broken.
         or_query = " OR ".join(terms)
-        print(f"searching in language: {language} with query: {or_query}")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -57,15 +56,38 @@ def fetch_chunks_by_ids(chunk_ids):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
-                "SELECT chunk_id, text FROM chunks WHERE chunk_id = ANY(%s)",
+                "SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE chunk_id = ANY(%s)",
                 (chunk_ids,)
             )
             rows = cur.fetchall()
     return rows
 
+def fetch_chunks_in_index_range_by_source(source_id, start_index, end_index):
+    with get_conn() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                "SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE source_id = %s AND chunk_index BETWEEN %s AND %s",
+                (source_id, start_index, end_index)
+            )
+            rows = cur.fetchall()
+    return rows
 def get_source_meta(doc_id):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute("SELECT source_id, file_name FROM sources WHERE source_id = %s", (doc_id,))
             row = cur.fetchone()
     return row
+
+def fetch_all_sources():
+    with get_conn() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute("SELECT source_id, file_name FROM sources")
+            rows = cur.fetchall()
+    return rows
+
+def fetch_chunks_by_source(source_id):
+    with get_conn() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute("SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE source_id = %s", (source_id,))
+            rows = cur.fetchall()
+    return rows
