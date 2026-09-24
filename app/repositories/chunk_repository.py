@@ -88,6 +88,6 @@ def fetch_all_sources():
 def fetch_chunks_by_source(source_id):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            cur.execute("SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE source_id = %s", (source_id,))
+            cur.execute("SELECT chunk_id::text, text, chunk_index, source_id::text FROM chunks WHERE source_id = %s", (source_id,))
             rows = cur.fetchall()
     return rows

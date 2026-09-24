@@ -1,8 +1,8 @@
 import os
 import secrets
 from typing import Annotated, List
-from app.eval.service import run_eval
-from app.eval.golden_dataset import add_eval_dataset, get_eval_dataset
+from app.eval.golden_dataset import add_eval_dataset, get_eval_dataset, pick_chunks_sample
+from app.eval.QA_agent import eval_agent_loop
 
 from contextlib import asynccontextmanager
 
@@ -99,8 +99,8 @@ def agent(request: Request, response: Response, prompt: str = Body(..., embed=Tr
     return {"response": result}
 
 @app.get("/eval")
-def eval():
-    sampled_chunks = run_eval()
+def eval(num_samples_per_source: int = 5):
+    sampled_chunks = pick_chunks_sample(num_samples_per_source)
     print(f"Sampled Chunks: {sampled_chunks}")
     return sampled_chunks
 
@@ -112,5 +112,10 @@ def create_eval_dataset(eval_data: list[dict] = Body(..., embed=True)):
 @app.get("/eval/get")
 def eval_dataset(limit: int = 10):
     return get_eval_dataset(limit)
+
+@app.post("/eval/agent")
+def eval_agent(prompt: str = Body(..., embed=True), max_iterations: int = 5):
+    result = eval_agent_loop(prompt, max_iterations=max_iterations)
+    return result
 # if __name__ == "__main__":
 #     uvicorn.run("main:app", host="127.0.0.1", port=8000)
