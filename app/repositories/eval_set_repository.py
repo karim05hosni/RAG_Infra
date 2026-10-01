@@ -22,6 +22,7 @@ eval_dataset (
 """
 
 def insert_eval_dataset(eval_data: list[dict]):
+    print(f"Inserting {eval_data}  into eval_dataset")
     try:
         with get_conn() as conn:
             with conn.transaction() as trans:
@@ -31,19 +32,20 @@ def insert_eval_dataset(eval_data: list[dict]):
                         data['id'] = str(uuid4())
                         cur.execute(
                             """
-                            INSERT INTO eval_dataset (id, chunk_id, corpus_id, question, answer, language, cross_lingual, chunk_text, source)
-                            VALUES ( %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            INSERT INTO eval_dataset (id, chunk_id, corpus_id, question, answer, language, cross_lingual, chunk_text, source, job_id)
+                            VALUES ( %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 data['id'],
                                 data['chunk_id'],
-                                data['corpus_id'],
+                                data['source_id'],
                                 data['question'],
                                 data['answer'],
                                 data['language'],
                                 data.get('cross_lingual', False),
                                 data.get('chunk_text', None),
-                                data['source']
+                                data['source'],
+                                data['job_id']
                             )
                         )
                         for expected_chunk in data.get('expected_chunks_ids'):
@@ -54,6 +56,24 @@ def insert_eval_dataset(eval_data: list[dict]):
                                 """,
                                 (data['id'], expected_chunk)
                             )
+                        # mark the chunk as persisted in eval_chunk_status
+                        cur.execute(
+                            """
+                            UPDATE eval_chunk_status
+                            SET status = 'persisted', updated_at = now()
+                            WHERE chunk_id = %s AND job_id = %s
+                            """,
+                            (data['chunk_id'], data['job_id'])
+                        )
+                        
+                        # clean WAL log for the jobId and chunk_id
+                        cur.execute(
+                            """
+                            DELETE FROM eval_dataset_wal
+                            WHERE job_id = %s AND %s = ANY(chunks_ids)
+                            """,
+                            (data['job_id'], data['chunk_id'])
+                        )
         return True
     except Exception as e:
         print(f"Error inserting eval dataset: {e}")
@@ -86,3 +106,22 @@ def fetch_eval_dataset(limit=10):
     except Exception as e:
         print(f"Error fetching eval dataset: {e}")
         return []
+
+def batch_mark_chunk_status(jobId, chunk_ids, status, reason=None):
+    try:
+        with get_conn() as conn:
+            with conn.transaction() as trans:
+                with conn.cursor() as cur:
+                    for chunk_id in chunk_ids:
+                        cur.execute(
+                            """
+                            UPDATE eval_chunk_status
+                            SET status = %s, reason = %s, updated_at = now()
+                            WHERE chunk_id = %s AND job_id = %s
+                            """,
+                            (status, reason, chunk_id, jobId)
+                        )
+        return True
+    except Exception as e:
+        print(f"Error batch marking status: {e}")
+        return False

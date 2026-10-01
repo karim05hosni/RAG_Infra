@@ -62,6 +62,16 @@ def fetch_chunks_by_ids(chunk_ids):
             rows = cur.fetchall()
     return rows
 
+def fetch_chunk_by_id(chunk_id):
+    with get_conn() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                "SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE chunk_id = %s",
+                (chunk_id,)
+            )
+            row = cur.fetchone()
+    return row
+
 def fetch_chunks_in_index_range_by_source(source_id, start_index, end_index):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
@@ -81,7 +91,7 @@ def get_source_meta(doc_id):
 def fetch_all_sources():
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            cur.execute("SELECT source_id, file_name FROM sources")
+            cur.execute("SELECT * FROM sources")
             rows = cur.fetchall()
     return rows
 

@@ -42,6 +42,39 @@ def pick_chunks_sample(num_chunks_per_source=5):
 
     return result
 
+def pick_chunks_sample_by_source(source_id, num_chunks_per_source=5):
+    """
+    Pick n structurally diverse chunks from one document's chunk list.
+    Diversity is across: position (early/middle/late) and length.
+    """
+    doc_chunks = fetch_chunks_by_source(source_id)
+    if not doc_chunks:
+        return []
+    if len(doc_chunks) <= num_chunks_per_source:
+        return doc_chunks
+
+    sorted_by_pos = sorted(doc_chunks, key=lambda x: x['chunk_index'])
+    total = len(sorted_by_pos)
+
+    # Step 1: positional picks — use a dict keyed by chunk_id to avoid duplicates
+    picks = {}
+    indices = [0, total // 4, total // 2, (3 * total) // 4, total - 1]
+    for idx in indices:
+        chunk = sorted_by_pos[idx]
+        picks[chunk['chunk_id']] = chunk
+        if len(picks) == num_chunks_per_source:
+            continue  # already have enough picks
+
+    # Step 2: swap one pick for the longest chunk if not already included
+    longest = max(doc_chunks, key=lambda c: len(c['text'].split()))
+    if longest['chunk_id'] not in picks and len(picks) == num_chunks_per_source:
+        # replace middle pick to preserve positional spread
+        middle = sorted_by_pos[total // 2]
+        picks.pop(middle['chunk_id'], None)
+        picks[longest['chunk_id']] = longest
+
+    return list(picks.values())[:num_chunks_per_source]
+
 def add_eval_dataset(eval_data: list[dict]):
     inserted = insert_eval_dataset(eval_data)
     return inserted

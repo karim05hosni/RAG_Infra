@@ -3,7 +3,7 @@ from datetime import datetime
 import langid
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from app.repositories.chunk_repository import fetch_chunks_by_ids, fetch_chunks_in_index_range_by_source
+from app.repositories.chunk_repository import fetch_chunk_by_id, fetch_chunks_by_ids, fetch_chunks_by_source, fetch_chunks_in_index_range_by_source
 from app.repositories import text_search_ts_rank, qdrant_search
 from app.shared import transformer
 import re
@@ -35,10 +35,15 @@ def semantic_search(query_embedding, top_k=70):
 def RRF(keyword_search_scores, keyword_search_scores_translated, semantic_search_scores, k=60, w_kw=1.0, w_sem=1.0, w_translated_kw=1.0, top_k=40):
     fused_scores = {}
     for i, (chunk_id, score) in enumerate(keyword_search_scores):
+        chunk_id = str(chunk_id)
         fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_kw / (k + i + 1)
     for i, (chunk_id, score) in enumerate(keyword_search_scores_translated):
+        chunk_id = str(chunk_id)
+        
         fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_translated_kw / (k + i + 1)
     for i, (chunk_id, score) in enumerate(semantic_search_scores):
+        chunk_id = str(chunk_id)
+        
         fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_sem / (k + i + 1)
     return sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
@@ -64,12 +69,13 @@ def hybrid_search(query: str):
     print(f"Translation time: {translation_ends - translation_starts}")
     
     keyword_search_starts = datetime.now()
-    keyword_search_scores = keywordSearch(query, language)
+    keyword_search_scores = keywordSearch(query, source_lang)
+    print(f"retrieved {len(keyword_search_scores)} keyword search results for query: {query} in language: {source_lang}")
     keyword_search_ends = datetime.now()
     
     print(f"Keyword search time: {keyword_search_ends - keyword_search_starts}")
     keyword_search_scores_translated = keywordSearch(translated_query, target_lang)
-    
+    print(f"retrieved {len(keyword_search_scores_translated)} keyword search results for translated query: {translated_query} in language: {target_lang}")
     fusion_starts = datetime.now()
     RRF_scores = RRF(keyword_search_scores, keyword_search_scores_translated, semantic_search_scores)
     fusion_ends = datetime.now()
@@ -79,14 +85,17 @@ def hybrid_search(query: str):
     
     response_formatting_starts = datetime.now()
     chunk_ids = [chunk_id for chunk_id, score in RRF_scores]
+    print(f"retrieved {len(chunk_ids)} chunk ids from RRF fusion")
     chunks = fetch_chunks_by_ids(chunk_ids)
+    print(f"retrieved {len(chunks)} chunks from postgres for chunk ids: {chunk_ids}")
     chunk_lookup = {}
     for chunk in chunks:
-        chunk_lookup[chunk['chunk_id']] = {
+        chunk_lookup[str(chunk['chunk_id'])] = {
             'text': chunk['text'],
             'chunk_index': chunk['chunk_index'],
             'source_id': chunk['source_id']
         }
+    print(f"created chunk lookup for {len(chunk_lookup)} chunks")
     final_results = [
         {"chunk_id": chunk_id, "score": score, "chunk_data": chunk_lookup.get(chunk_id)}
         for chunk_id, score in RRF_scores
@@ -100,6 +109,18 @@ def hybrid_search(query: str):
 def get_chunks_in_index_range_by_source(source_id, start_index, end_index):
     chunks = fetch_chunks_in_index_range_by_source(source_id, start_index, end_index)
     return chunks
+
+def get_neighboring_chunks(chunk_id, num_neighbors=2):
+    # get the chunk from the database
+    chunk = fetch_chunk_by_id(chunk_id)
+    if not chunk:
+        raise ValueError(f"Chunk with ID {chunk_id} not found.")
+
+    # get the neighboring chunks
+    neighboring_chunks = []
+    neighboring_chunks.extend(fetch_chunks_in_index_range_by_source(chunk['source_id'], chunk['chunk_index'] - num_neighbors, chunk['chunk_index'] + num_neighbors))
+
+    return neighboring_chunks
 
 def MT_translate(text, source_lang='english', target_lang='french'):
     model = None

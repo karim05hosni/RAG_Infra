@@ -1,188 +1,151 @@
 import json
+from logging import config
 import os
 
 from google import genai
+from pydantic import BaseModel
+from typing import Dict, List
+from app.retrieval.service import get_neighboring_chunks
 
-from app.eval.golden_dataset import add_eval_dataset, get_eval_dataset, pick_chunks_sample
-
-create_eval_dataset_tool = {
+get_neighbor_chunks_tool = {
     "type": "function",
-    "name": "create_eval_dataset",
-    "description": "A tool for creating an evaluation dataset.",
+    "name": "get_neighbor_chunks",
+    "description": "Fetches neighboring chunks of a given chunk ID. This is useful for retrieving additional context when generating question-answer pairs from a passage. The function returns the neighboring chunks in order, starting with the chunk before the given chunk and ending with the chunk after it.",
     "parameters": {
-        "type": "OBJECT",
+        "type": "object",
         "properties": {
-            "eval_data": {
-                "type": "ARRAY",
-                "description": "The evaluation dataset items to be created.",
-                "items": {
-                    "type": "OBJECT",
-                    "description": "A single evaluation record.",
-                    "properties": {
-                        "chunk_id": {
-                            "type": "STRING",
-                            "description": "Unique identifier for the primary chunk."
-                        },
-                        "corpus_id": {
-                            "type": "STRING",
-                            "description": "Unique identifier for the corpus."
-                        },
-                        "question": {
-                            "type": "STRING",
-                            "description": "The evaluation question or query."
-                        },
-                        "answer": {
-                            "type": "STRING",
-                            "description": "The target or ground-truth answer."
-                        },
-                        "language": {
-                            "type": "STRING",
-                            "description": "Language of the content (e.g., 'english')."
-                        },
-                        "cross_lingual": {
-                            "type": "BOOLEAN",
-                            "description": "Indicates whether the question/answer pair is cross-lingual."
-                        },
-                        "chunk_text": {
-                            "type": "STRING",
-                            "description": "Text content of the primary chunk."
-                        },
-                        "source": {
-                            "type": "STRING",
-                            "description": "source of the question & answer , yours is 'LLM-model'"
-                        },
-                        "expected_chunks_ids": {
-                            "type": "ARRAY",
-                            "description": "List of expected chunk UUID strings relevant to this entry.",
-                            "items": {
-                                "type": "STRING"
-                            }
-                        }
-                    },
-                    "required": [
-                        "chunk_id",
-                        "corpus_id",
-                        "question",
-                        "answer",
-                        "language",
-                        "cross_lingual",
-                        "chunk_text",
-                        "source",
-                        "expected_chunks_ids"
-                    ]
-                }
-            }
+            "chunk_id": {
+                "type": "string",
+                "description": "The ID of the chunk for which to fetch neighboring chunks.",
+            },
+            "num_neighbors": {
+                "type": "integer",
+                "description": "The number of neighboring chunks to fetch on each side of the given chunk. For example, if num_neighbors is 2, the function will return 2 chunks before and 2 chunks after the given chunk.",
+                "default": 2,
+            },
         },
-        "required": ["eval_data"]
-    }
-}
-get_chunks_sample_tool = {
-    "type": "function",
-    "name": "get_chunks_sample",
-    "description": "A tool for retrieving a sample of chunks for each source from the knowledge base.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "num_chunks_per_source": {
-                "type": "INTEGER",
-                "description": "The number of sample chunks to retrieve per source."
-            }
-        },
-        "required": ["num_chunks_per_source"]
-    }
-}
-get_eval_dataset_tool = {
-    "type": "function",
-    "name": "get_eval_dataset",
-    "description": "A tool for retrieving evaluation dataset.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "limit": {
-                "type": "INTEGER",
-                "description": "The maximum number of evaluation dataset chunks to retrieve."
-            }
-        },
-        "required": ["limit"]
-    }
-}
+        "required": ["chunk_id", "num_neighbors"],
+    },
 
-tools = [
-    create_eval_dataset_tool,
-    get_chunks_sample_tool,
-    get_eval_dataset_tool
-]
-# session_store: dict[str, list] = {} # session_id => history_steps (list of previous steps in the conversation)
-
-
-def execute_tool(tool_name, **tool_params):
-    if tool_name == "create_eval_dataset":
-        return add_eval_dataset(**tool_params)
-    if tool_name == "get_eval_dataset":
-        return get_eval_dataset(**tool_params)
-    if tool_name == "get_chunks_sample":
-        return pick_chunks_sample(**tool_params)
-    else:
-        raise ValueError(f"Tool '{tool_name}' is not recognized.")
+}
 
 genAi_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+class QAPair(BaseModel):
+    chunk_id: str
+    question: str
+    answer: str
+    language: str = "en"
+    cross_lingual: bool = False
+    expected_chunks_ids: List[str]
+
+class ChunkResult(BaseModel):
+    chunk_id: str
+    skip: bool
+    reason: str
+    qa_pairs: List[QAPair]
+
+class ChunkQAResponse(BaseModel):
+    chunks: List[ChunkResult]
 system_instructions = """
+    You are generating evaluation question-answer pairs for each passage of Dr. Amr's knowledge base.
+    The question must sound like a naive patient asking Dr. Amr's assistant about his experience with treatments, surgeries, procedures, or patient care.
+    The answer must be grounded ONLY in the passage below — do not add outside information.
+    If the passage has no clear question a patient would ask (e.g. it's an intro, outro, or fragment), flag it as "skip" and provide a reason in the "reason" field. Do not generate any Q/A pairs for skipped passages.
+    The passage may be in French or English, and the question and answer must be in the same language as the passage.
+    
+    If this passage alone is enough to ask and answer a complete question, do so. 
+    The number of Q/A pairs for each passage should be 1 to 2, unless the passage is too short or too long, in which case you may generate 0 or 4 Q/A pairs respectively.
+    If it references something incomplete (e.g. 'as I mentioned earlier', a cut-off sentence, a partial thought), call get_neighbor_chunks to get more context before answering.
 
-You are an AI agent that builds a golden dataset by creating Q/As based on the knowledge base for evaluating the performance of a retrieval-augmented generation (RAG) pipeline.
-The Questions must be a naive patient for eye doctor questions who is asking doctor's Assistant, a patient can ask about Dr.Amr's experience with treatments, surgeries, procedures and patient care, The answers must be based on the knowledge base ONLY.
-You have access to three tools: `create_eval_dataset`, `get_eval_dataset`, and `get_chunks_sample`. Use these tools to create, retrieve, and sample evaluation dataset chunks as needed.
-- `create_eval_dataset`: Use this tool to create new evaluation dataset chunks.
-- `get_eval_dataset`: Use this tool to retrieve existing evaluation dataset chunks.
-- `get_chunks_sample`: Use this tool to retrieve a sample of chunks for each source from the knowledge base.
+    Report exactly which chunk_ids you used "including the current chunk" to build your answer in expected_chunks_ids list of the final answer.
+    
+    You will receive a batch of chunks in the following format:
+    <chunks>
+        <chunk>
+            <chunk_text>{chunk_text}</chunk_text>
+            <chunk_id>{chunk_id}</chunk_id>
+        </chunk>
+    </chunks>
 
+    Respond only in JSON mapping each chunk_id to its array of Q/A pairs inside the 'chunks' key:
+    {
+        
+        "chunks": [
+            {
+                "chunk_id": "{chunk_id}",
+                "skip": false,
+                "reason": "",
+                "qa_pairs": [
+                    {
+                        "chunk_id": "{chunk_id}",
+                        "question": "{question}",
+                        "answer": "{answer}",
+                        "language": "{language}",
+                        "cross_lingual": false,
+                        "expected_chunks_ids": ["{chunk_id}", "{neighbor_chunk_id_1}", "{neighbor_chunk_id_2}"]
+                    }
+                ]
+            }
+        ]
+    }
 """
-history = [
-
-]
-def eval_agent_loop(prompt, max_iterations=5):
-    agent_final_response = None
-    history.append({
-        "type": "user_input",
-        "content": [{"type": "text", "text": prompt}]
-    })
-    for iteration in range(max_iterations):
-        print(f"Agent loop iteration {iteration + 1}/{max_iterations}")
+def generate_chunk_QA(chunks: list[dict], max_iterations=2)-> dict:
+    print(f"building chunks input for the model .....")
+    # build chunks input for the model
+    chunks_input = "<chunks>"
+    for chunk in chunks:
+        chunks_input += f"<chunk><chunk_text>{chunk['text']}</chunk_text><chunk_id>{str(chunk['chunk_id'])}</chunk_id></chunk>"
+    chunks_input += "</chunks>"
+    print(f"adding chunks input to the model: {chunks_input[:40]}...")  # print first 100 chars for brevity
+    history = [
+        {"type": "user_input", "content": [{"type": "text", "text": chunks_input}]}
+    ]
+    final_response = ''
+    for iteration in range(max_iterations + 1):
+        print(f"calling LLM ...")
         response = genAi_client.interactions.create(
             model=os.getenv("GEMINI_MODEL"),
             system_instruction=system_instructions,
-            tools=tools,
+            tools=[get_neighbor_chunks_tool],
+            store=False,
             input=history,
-            store=False
+            response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": ChunkQAResponse.model_json_schema()
+            }
         )
-        print(f"Agent response: {response}")
-
-        # Always record every step first — including the final model_output
         for step in response.steps:
             history.append(step.model_dump())
-            print(f"Step: {step}")
-
+        
         tool_calls = [step for step in response.steps if step.type == "function_call"]
         if not tool_calls:
-            agent_final_response = response.output_text
+            final_response = response.output_text
             break
-
         for step in tool_calls:
             try:
-                print(f"Executing tool '{step.name}' with arguments: {step.arguments}")
                 tool_result = execute_tool(step.name, **step.arguments)
                 result_text = json.dumps(tool_result, default=str)
+                history.append({
+                    "type": "function_result",
+                    "name": step.name,
+                    "call_id": step.id,
+                    "result": [{"type": "text", "text": result_text}],
+                })
             except Exception as e:
-                print(f"Error executing tool '{step.name}': {e}")
-                result_text = json.dumps({"error": f"Error executing tool '{step.name}': {e}"})
-                raise e
-            history.append({
-                "type": "function_result",
-                "name": step.name,
-                "call_id": step.id,
-                "result": [{"type": "text", "text": result_text}],
-            })
-        # pass function call result to the next iteration of the agent loop
-        
-        agent_final_response = response.output_text
+                print(f"Error executing tool {step.name}: {e}")
+                history.append({
+                    "type": "function_result",
+                    "name": step.name,
+                    "call_id": step.id,
+                    "result": [{"type": "text", "text": f"Error: {str(e)}"}],
+                })
+    final_response = response.output_text
+    return final_response
 
-    return agent_final_response
+def execute_tool(tool_name, **tool_params):
+    if tool_name == "get_neighbor_chunks":
+        return get_neighboring_chunks(**tool_params)
+    else:
+        raise ValueError(f"Tool '{tool_name}' is not recognized.")

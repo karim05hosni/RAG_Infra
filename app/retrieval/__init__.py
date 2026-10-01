@@ -1,1 +1,1 @@
-from .service import keywordSearch, RRF, semantic_search, hybrid_search
+from .service import keywordSearch, RRF, semantic_search, hybrid_search, get_neighboring_chunks

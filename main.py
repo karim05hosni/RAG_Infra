@@ -1,9 +1,9 @@
 import os
 import secrets
 from typing import Annotated, List
+from app import retrieval
+from app.eval import service as eval_service
 from app.eval.golden_dataset import add_eval_dataset, get_eval_dataset, pick_chunks_sample
-from app.eval.QA_agent import eval_agent_loop
-
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -105,7 +105,7 @@ def eval(num_samples_per_source: int = 5):
     return sampled_chunks
 
 @app.post("/eval/add")
-def create_eval_dataset(eval_data: list[dict] = Body(..., embed=True)):
+def add_eval_dataset(eval_data: list[dict] = Body(..., embed=True)):
     inserted = add_eval_dataset(eval_data)
     return {"inserted": inserted}
 
@@ -113,9 +113,16 @@ def create_eval_dataset(eval_data: list[dict] = Body(..., embed=True)):
 def eval_dataset(limit: int = 10):
     return get_eval_dataset(limit)
 
-@app.post("/eval/agent")
-def eval_agent(prompt: str = Body(..., embed=True), max_iterations: int = 5):
-    result = eval_agent_loop(prompt, max_iterations=max_iterations)
-    return result
+@app.get("/eval/generate")
+def generate_eval_dataset(jobId: str = None):
+    return eval_service.generate_eval_dataset(jobId=jobId)
+
+@app.get("/eval/retry")
+def retry_job(jobId):
+    return eval_service.retry_job(jobId)
+
+@app.get("/get-neighbor-chunks")
+def get_neighbor_chunks(chunk_id: str, num_neighbors: int = 2):
+    return retrieval.get_neighboring_chunks(chunk_id, num_neighbors)
 # if __name__ == "__main__":
 #     uvicorn.run("main:app", host="127.0.0.1", port=8000)
