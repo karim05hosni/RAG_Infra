@@ -28,166 +28,120 @@ def register_eval_job(jobId, num_samples_per_source=5):
             mark_chunk_status(jobId, chunk_id, "pending")
     return True
 
-def generate_eval_dataset(jobId=None, num_samples_per_source=5):
-    if (not jobId):
+
+
+# map the parsed response back to the chunks and build rows for insertion into eval_dataset
+def build_eval_rows(job_id: str, chunk_batch: dict, parsed_response: ChunkQAResponse) -> list[dict]:
+
+    chunk_response_map = {}
+    for chunk_result in parsed_response.chunks:
+        chunk_response_map[chunk_result.chunk_id] = chunk_result
+    rows = []
+    for chunk_id, chunk_data in chunk_batch.items():
+        evaluation = chunk_response_map.get(chunk_id)
+        if evaluation is None:
+            print(f"Warning: no evaluation returned for chunk {chunk_id}")
+            mark_chunk_status(job_id, chunk_id, "failed", reason="Missing evaluation in LLM response")
+            continue
+        if evaluation.skip:
+            clean_wal(job_id, chunk_id)
+            mark_chunk_status(job_id, chunk_id, "skipped", reason=evaluation.reason)
+            continue
+        for qa in evaluation.qa_pairs:
+            rows.append({
+                "job_id": job_id,
+                "chunk_id": chunk_id,
+                "source_id": chunk_data["source_id"],
+                "source": "LLM-model",
+                "question": qa.question,
+                "answer": qa.answer,
+                "language": qa.language,
+                "cross_lingual": qa.cross_lingual,
+                "chunk_text": chunk_data["text"],
+                "expected_chunks_ids": qa.expected_chunks_ids,
+            })
+    return rows
+
+# retrying the failed chunks from WAL log
+def retry_from_wal(job_id: str) -> None:
+    for entry in read_from_wal(job_id):
+        chunk_ids = entry["chunk_ids"]
+        # parsing the raw_response to validate
+        parsed = None
+        try:
+            parsed = ChunkQAResponse.model_validate_json(entry["raw_response"])
+        except (json.JSONDecodeError, ValidationError) as e:
+            print(f"Error parsing QA response for job {job_id}, chunks {chunk_ids}: {e}")
+            for chunk_id in chunk_ids:
+                mark_chunk_status(job_id, chunk_id, "failed", reason=f"QA parsing failed: {e}")
+        if parsed is None:
+            continue
+        # mapping the parsed response back to the chunks and inserting into eval_dataset
+        chunks_data = fetch_chunks_by_ids(chunk_ids)
+        chunk_batch = {}
+        for chunk in chunks_data:
+            chunk_batch[str(chunk["chunk_id"])] = chunk
+        rows = build_eval_rows(job_id, chunk_batch, parsed)
+        if rows:
+            insert_eval_dataset(rows) # marks persisted + cleans WAL per chunk
+
+
+# Generates QA for a batch of chunks and stages the result.
+def generate_and_stage(job_id: str, chunk_batch: dict) -> str | None:
+
+    chunk_ids = list(chunk_batch.keys())
+    try:
+        raw_response = generate_chunk_QA(list(chunk_batch.values()))
+        write_to_wal(job_id, chunk_ids, raw_response)
+        for chunk_id in chunk_ids:
+            mark_chunk_status(job_id, chunk_id, "generated")
+        return raw_response
+    except Exception as e:
+        print(f"Error generating QA for job {job_id}, chunks {chunk_ids}: {e}")
+        for chunk_id in chunk_ids:
+            mark_chunk_status(job_id, chunk_id, "failed", reason=f"QA generation failed: {e}")
+        return None
+# Runs one batch through generate -> parse -> map -> persist. No-op on empty batch.
+def process_batch(job_id: str, chunk_batch: dict) -> None:
+    if not chunk_batch:
+        print(f"Batch for job {job_id} is empty, skipping.")
+        return
+    raw_response = generate_and_stage(job_id, chunk_batch)
+    if raw_response is None:
+        return
+    chunk_ids = list(chunk_batch.keys())
+    # parsing the raw_response to validate
+    parsed_response = None
+    try:
+        parsed_response = ChunkQAResponse.model_validate_json(raw_response)
+    except (json.JSONDecodeError, ValidationError) as e:
+        print(f"Error parsing QA response for job {job_id}, chunks {chunk_ids}: {e}")
+        for chunk_id in chunk_ids:
+            mark_chunk_status(job_id, chunk_id, "failed", reason=f"QA parsing failed: {e}")
+    rows = build_eval_rows(job_id, chunk_batch, parsed_response)
+    if rows:
+        insert_eval_dataset(rows)  # marks persisted + cleans WAL per chunk
+
+def generate_eval_dataset(jobId: str | None = None, num_samples_per_source: int = 5, batch_size: int = 10) -> dict:
+    if jobId is None:
         jobId = str(uuid4())
         print(f"Generated new jobId: {jobId}")
     else:
         print(f"Using provided jobId: {jobId}")
+    
     register_eval_job(jobId, num_samples_per_source)
-    chunk_batch: dict[str, dict] =  {}
+
+    chunk_batch: dict[str, dict] = {}
     for chunk in fetch_chunks_data_by_status(jobId, status_filter=["pending", "failed"]):
-        chunk_id: str = str(chunk['chunk_id'])
-        source_id = chunk['source_id']
-        chunk_batch[chunk_id] = chunk
-        if len(chunk_batch) < 8:
-            continue
-        LLM_response = "{}"
-        try:
-            print(f"Generating QA from source {source_id}")
-            LLM_response = generate_chunk_QA(list(chunk_batch.values()))
-            print(f"Writing to WAL for job {jobId} with chunks {list(chunk_batch.keys())}")
-            write_to_wal(jobId, list(chunk_batch.keys()), LLM_response)
-            for chunk_id in chunk_batch.keys():
-                mark_chunk_status(jobId, chunk_id, "generated")
-        except (json.JSONDecodeError, ValidationError) as e:
-            print(f"Error parsing QA generation response for source {source_id}: {e}")
-            for chunk_id in chunk_batch.keys():
-                mark_chunk_status(jobId, chunk_id, "failed", reason=f"QA generation failed: {e}")
-            chunk_batch.clear()
-            continue
-        
-        try:
-            parsed_response = ChunkQAResponse.model_validate_json(LLM_response)
-            print(f"generated batch QA for source {source_id}: {parsed_response}...")
-            # chunk_id -> response mapping
-            chunk_response_map = {}
-            for chunk_result in parsed_response.chunks:
-                chunk_id = str(chunk_result.chunk_id)
-                chunk_response_map[chunk_id] = chunk_result
+        chunk_batch[str(chunk["chunk_id"])] = chunk
+        if len(chunk_batch) >= batch_size:
+            process_batch(jobId, chunk_batch)
+            chunk_batch = {}
+    process_batch(jobId, chunk_batch)  # flush remainder, same path as full batches
+    retry_from_wal(jobId)  # recover anything staged but not persisted
 
-            eval_dataset = []
-
-            for chunk_id, chunk_data in chunk_batch.items():
-                chunk_data['evaluation'] = chunk_response_map[chunk_id]
-                print(f"chunk_data after evaluation: {chunk_data}")
-                # check if the chunk was marked as skipped
-                if chunk_data['evaluation'].skip:
-                    # clean from WAL log for the jobId and chunk_id
-                    clean_wal(jobId, chunk_id)
-                    mark_chunk_status(jobId, chunk_id, "skipped", reason=chunk_data['evaluation'].reason)
-                    continue
-
-                for qa_pair in chunk_data["evaluation"].qa_pairs:
-                    eval_dataset.append({
-                        "job_id": jobId,
-                        "chunk_id": chunk_id,
-                        "source_id": chunk_data['source_id'],
-                        "source": 'LLM-model',
-                        "question": qa_pair.question,
-                        "answer": qa_pair.answer,
-                        "language": qa_pair.language,
-                        "cross_lingual": qa_pair.cross_lingual,
-                        "chunk_text": chunk_data['text'],
-                        "expected_chunks_ids": qa_pair.expected_chunks_ids
-                    })
-        except Exception as e:
-            print(f"Error processing generated QA for source {source_id}: {e}")
-            for chunk_id in chunk_batch.keys():
-                mark_chunk_status(jobId, chunk_id, "failed", reason=f"QA processing failed: {e}")
-            continue
-        finally:
-            chunk_batch.clear()  # clear the batch after processing
-
-        insert_eval_dataset(eval_dataset) # already marks the chunk as persisted in eval_chunk_status, cleans WAL log for the jobId and chunk_id
-
-    # TODO: process the remainder
-    for chunk_id, chunk_data in chunk_batch.items():
-        try:
-            print(f"Generating QA for remaining chunk {chunk_id} from source {chunk_data['source_id']}")
-            LLM_response = generate_chunk_QA([chunk_data])
-            print(f"Writing to WAL for job {jobId} with chunk {chunk_id}")
-            write_to_wal(jobId, [chunk_id], LLM_response)
-            mark_chunk_status(jobId, chunk_id, "generated")
-        except (json.JSONDecodeError, ValidationError) as e:
-            print(f"Error parsing QA generation response for chunk {chunk_id}: {e}")
-            mark_chunk_status(jobId, chunk_id, "failed", reason=f"QA generation failed: {e}")
-            continue
-        
-        try:
-            parsed_response = ChunkQAResponse.model_validate_json(LLM_response)
-            print(f"generated QA for chunk {chunk_id}: {parsed_response}...")
-            # check if the chunk was marked as skipped
-            if parsed_response.chunks[0].skip:
-                # clean from WAL log for the jobId and chunk_id
-                clean_wal(jobId, chunk_id)
-                mark_chunk_status(jobId, chunk_id, "skipped", reason=parsed_response.chunks[0].reason)
-                continue
-
-            eval_dataset = []
-            for qa_pair in parsed_response.chunks[0].qa_pairs:
-                eval_dataset.append({
-                    "job_id": jobId,
-                    "chunk_id": chunk_id,
-                    "source_id": chunk_data['source_id'],
-                    "source": 'LLM-model',
-                    "question": qa_pair.question,
-                    "answer": qa_pair.answer,
-                    "language": qa_pair.language,
-                    "cross_lingual": qa_pair.cross_lingual,
-                    "chunk_text": chunk_data['text'],
-                    "expected_chunks_ids": qa_pair.expected_chunks_ids
-                })
-        except Exception as e:
-            print(f"Error processing generated QA for chunk {chunk_id}: {e}")
-            mark_chunk_status(jobId, chunk_id, "failed", reason=f"QA processing failed: {e}")
-            continue
-
-        insert_eval_dataset(eval_dataset) # already marks the chunk as persisted in eval_chunk_status
-
-    # retry any failed chunks from WAL log
-    not_persisted_chunks = read_from_wal(jobId)
-    for not_persisted_chunk in not_persisted_chunks:
-        print(f"Retrying to persist chunks for job {jobId} from WAL log: {not_persisted_chunk}")
-        # read from WAL log, parse the raw response, and try to persist the chunks again
-        parsed_response = ChunkQAResponse.model_validate_json(not_persisted_chunk['raw_response'])
-        print(f"Retrying to insert into eval_dataset for job {jobId}: {parsed_response}...")
-        # chunk_id -> response mapping
-        chunk_response_map = {}
-        for chunk_result in parsed_response.chunks:
-            chunk_id = str(chunk_result.chunk_id)
-            chunk_response_map[chunk_id] = chunk_result
-        eval_dataset = []
-        # retrie chunk text and source_id
-        chunks_data = fetch_chunks_by_ids(list(chunk_response_map.keys()))
-        for chunk_data in chunks_data:
-            chunk_id = str(chunk_data['chunk_id'])
-            chunk_data['evaluation'] = chunk_response_map[chunk_id]
-            print(f"chunk_data after evaluation: {chunk_data}")
-            # check if the chunk was marked as skipped
-            if chunk_data['evaluation'].skip:
-                # clean from WAL log for the jobId and chunk_id
-                clean_wal(jobId, chunk_id)
-                mark_chunk_status(jobId, chunk_id, "skipped", reason=chunk_data['evaluation'].reason)
-                continue
-
-            for qa_pair in chunk_data["evaluation"].qa_pairs:
-                eval_dataset.append({
-                    "job_id": jobId,
-                    "chunk_id": chunk_id,
-                    "source_id": chunk_data['source_id'],
-                    "source": 'LLM-model',
-                    "question": qa_pair.question,
-                    "answer": qa_pair.answer,
-                    "language": qa_pair.language,
-                    "cross_lingual": qa_pair.cross_lingual,
-                    "chunk_text": chunk_data['text'],
-                    "expected_chunks_ids": qa_pair.expected_chunks_ids
-                })
-        insert_eval_dataset(eval_dataset) # already marks the chunk as persisted in eval_chunk_status
     inserted_chunks = len(fetch_chunks_status(jobId, status_filter=["persisted"]))
     skipped_chunks = len(fetch_chunks_status(jobId, status_filter=["skipped"]))
-    print(f"Inserted {inserted_chunks} chunks into eval_dataset, skipped {skipped_chunks} chunks for job {jobId}")
     return {
         "job_id": jobId,
         "message": f"inserted {inserted_chunks} chunks into eval_dataset, skipped {skipped_chunks} chunks",
