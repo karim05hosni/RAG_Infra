@@ -21,7 +21,12 @@ def insert_sources_chunks_trans(sources, chunks):
                     print(f"Error occurred while inserting documents and chunks: {e}")
                     raise e
 
-
+def fetch_all_chunks():
+    with get_conn() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute("SELECT * FROM chunks")
+            rows = cur.fetchall()
+    return rows
 
 def text_search_ts_rank(query, language, top_k=20):
     print(f"Performing text search for query: '{query}' with top_k={top_k}")
@@ -35,10 +40,10 @@ def text_search_ts_rank(query, language, top_k=20):
         # a different function). Using "|" here was silently ignored/broken.
         or_query = " OR ".join(terms)
         with get_conn() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 cur.execute(
                     """
-                    SELECT chunk_id, ts_rank(text_search, query) AS score
+                    SELECT chunk_id, text, ts_rank(text_search, query) AS score
                     FROM chunks, websearch_to_tsquery(%s, %s) AS query
                     WHERE text_search @@ query and language = %s
                     ORDER BY score DESC

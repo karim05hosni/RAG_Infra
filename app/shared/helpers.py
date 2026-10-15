@@ -1,5 +1,6 @@
 
 import json
+import re
 from uuid import UUID
 import uuid
 
@@ -38,3 +39,15 @@ def split_list_by_max_bytes(lst, max_bytes):
         grouped_chunks.append(current_group)
 
     return grouped_chunks
+
+def sanitize_fr_text(text: str) -> str:
+    text = text.lower()
+    # normalize curly apostrophes to straight, so one pattern covers both
+    text = text.replace("’", "'")
+    sanitized_text = re.sub(
+        r"\b(c'|d'|l'|qu'|j'|n'|s'|t'|m')\b",
+        "",
+        text,
+    )
+    sanitized_text = re.sub(r"\s+", " ", sanitized_text).strip()
+    return sanitized_text

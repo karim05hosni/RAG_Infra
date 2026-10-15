@@ -31,7 +31,7 @@ hybrid_search_tool = {
 get_chunks_in_index_range_by_source_tool = {
     "type": "function",
     "name": "get_chunks_in_index_range_by_source",
-    "description": "A tool for retrieving chunks from the knowledge base within a specific index range for a given source in order to provide more context.",
+    "description": "A tool for retrieving chunks from a specific source within a given index range. Use this tool when you have already retrieved a chunk and need surrounding context from the same source for a more complete answer.",
     "parameters": {
         "type": "object",
         "properties": {

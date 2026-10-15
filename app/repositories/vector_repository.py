@@ -16,12 +16,20 @@ def delete_all_collections():
         qdrant_client.delete_collection(collection.name)
 # delete_all_collections()
 
-if not qdrant_client.collection_exists(collection_name):
-    print(f"Creating collection '{collection_name}' with vector size 384 .")
-    qdrant_client.create_collection(
-        collection_name=collection_name,
-        vectors_config=VectorParams(size=384, distance=Distance.DOT)
-    )
+# if not qdrant_client.collection_exists(collection_name):
+#     print(f"Creating collection '{collection_name}' with vector size 1024 .")
+#     qdrant_client.create_collection(
+#         collection_name=collection_name,
+#         vectors_config=VectorParams(size=1024, distance=Distance.DOT)
+#     )
+    
+def create_collection(collection_name: str, vector_size: int = 1024):
+    if not qdrant_client.collection_exists(collection_name):
+        print(f"Creating collection '{collection_name}' with vector size {vector_size}.")
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.DOT)
+        )
 
 
 # You can now use all standard client operations (create_collection, upsert, query_points)

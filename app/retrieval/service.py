@@ -3,6 +3,7 @@ from datetime import datetime
 import langid
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
+from app.clients.ollama import embed_text
 from app.repositories.chunk_repository import fetch_chunk_by_id, fetch_chunks_by_ids, fetch_chunks_by_source, fetch_chunks_in_index_range_by_source
 from app.repositories import text_search_ts_rank, qdrant_search
 from app.shared import transformer
@@ -22,42 +23,63 @@ def detect_search_language(prompt):
     return lang
 
 def keywordSearch(query, language, top_k=70):
-    keyword_search_results = []
+    keyword_search_results: list[dict] = []
     ts_rank = text_search_ts_rank(query, language, top_k)
     keyword_search_results = ts_rank
     return keyword_search_results
 
-def semantic_search(query_embedding, top_k=70):
+def semantic_search(query, top_k=70):
+    # query_embedding = transformer.embedding_model.encode(query, normalize_embeddings=True)
+    query_embedding = embed_text([query])[0]
     qdrant_results = qdrant_search(query_embedding, top_k=70).points
     dot_product_scores: list[tuple[str, float]] = sorted([(result.payload['chunk_id'], result.score) for result in qdrant_results], key=lambda x: x[1], reverse=True)
-    return dot_product_scores
+    chunk_ids = [chunk_id for chunk_id, score in dot_product_scores]
+    chunks = fetch_chunks_by_ids(chunk_ids)
+    chunks_scores: list[dict] = []
+    chunk_lookup = {str(chunk['chunk_id']): chunk for chunk in chunks}
+    for chunk_id, score in dot_product_scores:
+        chunk_data = chunk_lookup.get(str(chunk_id))
+        if chunk_data:
+            chunks_scores.append({
+                "chunk_id": chunk_id,
+                "score": score,
+                "chunk_data": chunk_data
+            })
+    return chunks_scores
 
-def RRF(keyword_search_scores, keyword_search_scores_translated, semantic_search_scores, k=60, w_kw=1.0, w_sem=1.0, w_translated_kw=1.0, top_k=40):
+def RRF(keyword_search_scores: list[dict], keyword_search_scores_translated: list[dict], semantic_search_scores: list[dict], k=60, w_kw=1.0, w_sem=1.0, w_translated_kw=1.0, top_k=40):
     fused_scores = {}
-    for i, (chunk_id, score) in enumerate(keyword_search_scores):
-        chunk_id = str(chunk_id)
-        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_kw / (k + i + 1)
-    for i, (chunk_id, score) in enumerate(keyword_search_scores_translated):
-        chunk_id = str(chunk_id)
-        
-        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_translated_kw / (k + i + 1)
-    for i, (chunk_id, score) in enumerate(semantic_search_scores):
-        chunk_id = str(chunk_id)
-        
-        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_sem / (k + i + 1)
+    counter = 0
+    print(f"keyword_search_scores: {keyword_search_scores[:5]}")
+    for doc in keyword_search_scores:
+        chunk_id = str(doc['chunk_id'])
+        score = doc['score']
+        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_kw / (k+ counter + 1)
+        counter += 1
+    counter = 0
+    for doc in keyword_search_scores_translated:
+        chunk_id = str(doc['chunk_id'])
+        score = doc['score']
+        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_translated_kw / (k+ counter + 1)
+        counter += 1
+    counter = 0
+    for doc in semantic_search_scores:
+        chunk_id = str(doc['chunk_id'])
+        score = doc['score']
+        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0) + w_sem / (k + counter + 1)
+        counter += 1
     return sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
-def hybrid_search(query: str):
+def hybrid_search(query: str, top_k: int = 12):
     detect_language_starts = datetime.now()
     language = detect_search_language(query)
     detect_language_ends = datetime.now()
     print(f"Language detection time: {detect_language_ends - detect_language_starts}")
     if language not in ['en', 'fr']:
         raise ValueError(f"Unsupported language detected: {language}. Only English and French are supported.")
-    query_embedding = transformer.embedding_model.encode(query, normalize_embeddings=True)
 
     semantic_search_starts = datetime.now()
-    semantic_search_scores = semantic_search(query_embedding)
+    semantic_search_scores = semantic_search(query)
     semantic_search_ends = datetime.now()
     target_lang = 'english' if language != 'en' else 'french'
     source_lang = 'english' if language == 'en' else 'french'
@@ -101,13 +123,15 @@ def hybrid_search(query: str):
         for chunk_id, score in RRF_scores
     ]
     response_formatting_ends = datetime.now()
-    print(f"response formatting time: {response_formatting_ends - response_formatting_starts}")
+    print(final_results[:top_k])
     return {
-        'hybrid_search_results': final_results
+        'hybrid_search_results': final_results[:top_k]
     }
 
 def get_chunks_in_index_range_by_source(source_id, start_index, end_index):
     chunks = fetch_chunks_in_index_range_by_source(source_id, start_index, end_index)
+    print(f"Retrieved {len(chunks)} chunks from source_id: {source_id} in index range: {start_index} to {end_index}")
+    print(f"Chunks: {chunks}")
     return chunks
 
 def get_neighboring_chunks(chunk_id, num_neighbors=2):
