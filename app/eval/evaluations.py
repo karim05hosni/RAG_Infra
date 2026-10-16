@@ -6,14 +6,26 @@ Evaluation functions for the RAG system.
 """
 import json
 import re
+import time
 from transformers import pipeline
 import outlines
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.shared import transformer
 
 class ClaimList(BaseModel):
     claims: list[str]
+class ClaimVerification(BaseModel):
+    entailments: list[str] = Field(default_factory=list)
+    neutral: list[str] = Field(default_factory=list)
+    contradictions: list[str] = Field(default_factory=list)
+
+class NeutralClaim(BaseModel):
+    entailments: list[str] = Field(default_factory=list)
+    contradictions: list[str] = Field(default_factory=list)
+    
+class LLMJudge(BaseModel):
+    judgments: dict[str, NeutralClaim]  # {claim->{entailments->[], contradiction->[]}, ...}
 
 from .golden_dataset import get_eval_dataset
 from app.clients.ollama import ollama_client
@@ -93,20 +105,87 @@ def clean_for_nli(chunk_text: str) -> str:
     # strip "From X.pdf: " / "From X.mp4: " prefix before NLI scoring
     return re.sub(r"^From [^:]+:\s*", "", chunk_text)
 
-def verify_claim_against_chunks(claim: str, chunks: list[str]) -> tuple[bool, str | None]:
+def neutral_score_judge(claims_context_pairs: dict[str, list]) -> dict[str, NeutralClaim]:
+    # Build a stable id for each claim, so we don't have to match on
+    # text the LLM might retype slightly differently.
+    claim_id_to_text = {}
+    payload = {}
+
+    claim_index = 0
+    for claim_text, chunks in claims_context_pairs.items():
+        claim_id = f"claim_{claim_index}"
+        claim_id_to_text[claim_id] = claim_text
+        payload[claim_id] = chunks
+        claim_index += 1
+
+    system_prompt = """
+    you'll be given a list of claim ids, each mapped to a list of context snippets.
+    the NLI model already scored all given pairs as "neutral", but you need to judge if the claim is actually supported by its context.
+    it's a multi-lingual medical context, so be careful and check if the claim is actually supported.
+
+    return JSON shaped like:
+    {"claim_0": {"entailments": [...], "contradictions": [...]}, "claim_1": {...}, ...}
+    Use the exact claim ids given to you as keys. Do not invent new ids and do not skip any.
+    """
+    user_prompt = f"Judge the following claims:\n\n{json.dumps(payload)}\n\n"
+
+    max_retries = 3
+    response = None
+    for attempt in range(max_retries):
+        try:
+            response = client.chat(
+                model='hf.co/Qwen/Qwen2.5-3B-Instruct-GGUF:Q4_K_M',
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt}
+                ],
+                format=LLMJudge.model_json_schema()
+            )
+            print(f"Neutrality judge response: {response.message}")
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1}: Error during LLM call: {e}")
+            if attempt < max_retries - 1:
+                print("Retrying...")
+                time.sleep(2 ** attempt)
+            else:
+                raise e
+
+    try:
+        parsed = LLMJudge.model_validate_json(response.message.content)
+        judgments_by_id = parsed.judgments
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse neutrality judgments from response: {e}")
+        raise e
+
+    # Map the judge's answers back to the original claim text ourselves,
+    # instead of trusting the model to echo the claim text correctly.
+    results_by_claim_text = {}
+    for claim_id, claim_text in claim_id_to_text.items():
+        if claim_id in judgments_by_id:
+            results_by_claim_text[claim_text] = judgments_by_id[claim_id]
+        else:
+            print(f"WARNING: judge did not return a result for {claim_id!r} ({claim_text!r})")
+            results_by_claim_text[claim_text] = NeutralClaim()
+
+    return results_by_claim_text
+def verify_claim_against_chunks(claim: str, chunks: list[str]) -> ClaimVerification:
     """Returns (is_supported, supporting_chunk_or_None)."""
+    entailments = []
+    contradictions = []
+    neutral = []
     for chunk in chunks:
         cleaned_chunk = clean_for_nli(chunk)
         print(f"Checking entailment for claim: '{claim}' against chunk: '{cleaned_chunk}'")
         label = check_entailment(premise=cleaned_chunk, hypothesis=claim)
         print(f"Entailment result: {label}")
         if label == "entailment":
-            return True, chunk  # found support, stop early — no need to check remaining chunks
-        # if label == "neutral":
-            # TODO: route to a second check
-            # pass
-    print(f"No supporting chunk found for claim: '{claim}'")
-    return False, None  # no chunk entailed this claim
+            entailments.append(chunk)
+        elif label == "contradiction":
+            contradictions.append(chunk)
+        else:
+            neutral.append(chunk)
+    return ClaimVerification(entailments=entailments, contradictions=contradictions, neutral=neutral)
 
 def decompose_chunks_into_atomic(chunks: list[str]) -> list[str]:
     single_fact_chunks = []
@@ -133,21 +212,50 @@ def decompose_chunks_into_atomic(chunks: list[str]) -> list[str]:
             print(f"Failed to parse atomic claims from response: {e}")
             single_fact_chunks.append(chunk)  # fallback to original chunk if parsing fails
     return single_fact_chunks
+
 def faithfulness(answer: str, chunks: list[str]) -> dict:
-    claims = extract_claims(answer)  # still the one LLM call for decomposition
+    claims = extract_claims(answer) 
     if not claims:
         return {"score": 1.0, "details": []}
 
     # decompose multi-fact chunks into atomic single-fact statements for more granular evaluation
     atomic_chunks = decompose_chunks_into_atomic(chunks)
     details = []
+    claims_verification_results: dict[str, ClaimVerification] = {}
     for claim in claims:
-        supported, source_chunk = verify_claim_against_chunks(claim, atomic_chunks)
+        claim_verification = verify_claim_against_chunks(claim, atomic_chunks)
+        claims_verification_results[claim] = claim_verification
+    # prepare neutral claims for LLM judge
+    neutral_claims_context_pairs = {}
+    for claim, verification in claims_verification_results.items():
+        neutral_claims_context_pairs[claim] = verification.neutral
+    # use LLM judge to filter in the supported neutral claims
+    judge_results = {}
+    if neutral_claims_context_pairs:
+        judge_results = neutral_score_judge(neutral_claims_context_pairs)
+    # erase neutrals and add entailments & contradictions for every claim in claims_verification_results
+    print(f"claims verification results: {len(claims_verification_results)}")
+    print(f"claims: {len(claims)}")
+    for claim, verification in claims_verification_results.items():
+        NLI_supported  = verification.entailments
+        NLI_contradictions = verification.contradictions
+        LLM_supported = {}
+        LLM_contradictions = {}
+        if judge_results:
+            LLM_supported = judge_results[claim].entailments
+            LLM_contradictions = judge_results[claim].contradictions
+        # combine NLI and LLM results
+        supported = list(set(NLI_supported + LLM_supported))
+        contradictions = list(set(NLI_contradictions + LLM_contradictions))
+        # erase neutrals
+        claims_verification_results[claim] = ClaimVerification(entailments=supported, contradictions=contradictions, neutral=[])
         details.append({
             "claim": claim,
-            "supported": supported,
-            "source_chunk": source_chunk,
+            "supported": len(supported) > 0,
+            "entailments": supported,
+            "contradictions": contradictions
         })
+        
     print(f"Faithfulness evaluation details: {details}")
     score = sum(d["supported"] for d in details) / len(details)
     return {"score": score, "details": details}
