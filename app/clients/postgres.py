@@ -72,18 +72,3 @@ def get_conn() -> psycopg.Connection:
     with _pool.connection() as conn:
         yield conn
         
-
-
-
-def execute(query: str, params: tuple = ()) -> list:
-    """
-    Convenience helper for simple one-off SELECTs.
-    For multi-statement transactions (e.g. your ingestion pipeline),
-    use `get_conn()` directly and manage the transaction explicitly instead.
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            if cur.description is None:
-                return []
-            return cur.fetchall()

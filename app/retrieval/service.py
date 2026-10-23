@@ -71,16 +71,14 @@ def RRF(keyword_search_scores: list[dict], keyword_search_scores_translated: lis
     return sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
 def hybrid_search(query: str, top_k: int = 12):
-    detect_language_starts = datetime.now()
     language = detect_search_language(query)
-    detect_language_ends = datetime.now()
-    print(f"Language detection time: {detect_language_ends - detect_language_starts}")
     if language not in ['en', 'fr']:
         raise ValueError(f"Unsupported language detected: {language}. Only English and French are supported.")
 
     semantic_search_starts = datetime.now()
     semantic_search_scores = semantic_search(query)
     semantic_search_ends = datetime.now()
+    
     target_lang = 'english' if language != 'en' else 'french'
     source_lang = 'english' if language == 'en' else 'french'
     translation_starts = datetime.now()
@@ -98,14 +96,10 @@ def hybrid_search(query: str, top_k: int = 12):
     print(f"Keyword search time: {keyword_search_ends - keyword_search_starts}")
     keyword_search_scores_translated = keywordSearch(translated_query, target_lang)
     print(f"retrieved {len(keyword_search_scores_translated)} keyword search results for translated query: {translated_query} in language: {target_lang}")
-    fusion_starts = datetime.now()
     RRF_scores = RRF(keyword_search_scores, keyword_search_scores_translated, semantic_search_scores)
-    fusion_ends = datetime.now()
     
-    print(f"fusion time: {fusion_ends - fusion_starts}")
     # get chunks texts from postgres
     
-    response_formatting_starts = datetime.now()
     chunk_ids = [chunk_id for chunk_id, score in RRF_scores]
     print(f"retrieved {len(chunk_ids)} chunk ids from RRF fusion")
     chunks = fetch_chunks_by_ids(chunk_ids)
@@ -119,10 +113,9 @@ def hybrid_search(query: str, top_k: int = 12):
         }
     print(f"created chunk lookup for {len(chunk_lookup)} chunks")
     final_results = [
-        {"chunk_id": chunk_id, "score": score, "chunk_data": chunk_lookup.get(chunk_id)}
+        {"chunk_id": str(chunk_id), "score": score, "chunk_data": chunk_lookup.get(str(chunk_id))}
         for chunk_id, score in RRF_scores
     ]
-    response_formatting_ends = datetime.now()
     print(final_results[:top_k])
     return {
         'hybrid_search_results': final_results[:top_k]
@@ -142,7 +135,7 @@ def get_neighboring_chunks(chunk_id, num_neighbors=2):
 
     # get the neighboring chunks
     neighboring_chunks = []
-    neighboring_chunks.extend(fetch_chunks_in_index_range_by_source(chunk['source_id'], chunk['chunk_index'] - num_neighbors, chunk['chunk_index'] + num_neighbors))
+    neighboring_chunks.extend(fetch_chunks_in_index_range_by_source(str(chunk['source_id']), chunk['chunk_index'] - num_neighbors, chunk['chunk_index'] + num_neighbors))
 
     return neighboring_chunks
 

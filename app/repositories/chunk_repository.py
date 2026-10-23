@@ -24,7 +24,7 @@ def insert_sources_chunks_trans(sources, chunks):
 def fetch_all_chunks():
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            cur.execute("SELECT * FROM chunks")
+            cur.execute("SELECT chunk_id::text, text, chunk_index, source_id FROM chunks")
             rows = cur.fetchall()
     return rows
 
@@ -43,7 +43,7 @@ def text_search_ts_rank(query, language, top_k=20):
             with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 cur.execute(
                     """
-                    SELECT chunk_id, text, ts_rank(text_search, query) AS score
+                    SELECT chunk_id::text, text, ts_rank(text_search, query) AS score
                     FROM chunks, websearch_to_tsquery(%s, %s) AS query
                     WHERE text_search @@ query and language = %s
                     ORDER BY score DESC
@@ -61,7 +61,7 @@ def fetch_chunks_by_ids(chunk_ids):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
-                "SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE chunk_id = ANY(%s)",
+                "SELECT chunk_id::text, text, chunk_index, source_id::text FROM chunks WHERE chunk_id = ANY(%s)",
                 (chunk_ids,)
             )
             rows = cur.fetchall()
@@ -71,7 +71,7 @@ def fetch_chunk_by_id(chunk_id):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
-                "SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE chunk_id = %s",
+                "SELECT chunk_id::text, text, chunk_index, source_id::text FROM chunks WHERE chunk_id = %s",
                 (chunk_id,)
             )
             row = cur.fetchone()
@@ -81,7 +81,7 @@ def fetch_chunks_in_index_range_by_source(source_id, start_index, end_index):
     with get_conn() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
-                "SELECT chunk_id, text, chunk_index, source_id FROM chunks WHERE source_id = %s AND chunk_index BETWEEN %s AND %s",
+                "SELECT chunk_id::text, text, chunk_index, source_id::text FROM chunks WHERE source_id = %s AND chunk_index BETWEEN %s AND %s",
                 (source_id, start_index, end_index)
             )
             rows = cur.fetchall()

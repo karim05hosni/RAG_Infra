@@ -71,7 +71,7 @@ def ingest_files(file_paths, chunk_size=10):
                 elif detect(chunk['text']) == 'en':
                     language = 'english'
                 else:
-                    language = 'unknown'
+                    raise ValueError(f"Unsupported language detected in chunk {i} of video {file_name}: {detect(chunk['text'])}")
                 print(f"Detected language for chunk {i} of video {file_name}: {language}")
                 chunk_data = {
                     'chunk_id': generate_chunk_id(doc_id, i),
@@ -95,7 +95,7 @@ def ingest_files(file_paths, chunk_size=10):
             elif detect(text) == 'en':
                 language = 'english'
             else:
-                language = 'unknown'
+                raise ValueError(f"Unsupported language detected in document {file_name}: {detect(text)}")
             print(f"Detected language for document {file_name}: {language}")
             chunks = chunker.chunk_text(text, chunk_size)
             for i, chunk in enumerate(chunks):

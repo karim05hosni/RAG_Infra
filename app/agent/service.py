@@ -9,7 +9,7 @@ import os
 from app.retrieval.service import get_chunks_in_index_range_by_source
 from app.shared.session_manager import add_to_session_history, create_session, get_session_history
 from app.shared.session_manager import session_exists
-
+import litellm
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -124,45 +124,52 @@ def agent_loop(prompt, session_id, max_iterations=5):
         create_session(session_id)
 
     add_to_session_history(session_id, {
-        "type": "user_input",
-        "content": [{"type": "text", "text": prompt}]
+        "role": "user",
+        "content": prompt
     })
     
 
     agent_final_response = None
+    messages: list = [
+            {"role": "system", "content": system_instructions},
+            *get_session_history(session_id),
+    ]
     for iteration in range(max_iterations):
         print(f"Agent loop iteration {iteration + 1}/{max_iterations} for session {session_id}")
-        response = genAi_client.interactions.create(
-            model=os.getenv("GEMINI_MODEL"),
-            system_instruction=system_instructions,
-            tools=tools,
-            store=False,
-            input=get_session_history(session_id)
+
+        llm_call_start_time = datetime.now()
+        response =litellm.completion(
+            model='gemini/' + os.getenv("GEMINI_MODEL"),
+            messages=messages,
+            tools=tools
         )
+        llm_call_end_time = datetime.now()
+        print(f"LLM call duration: {llm_call_end_time - llm_call_start_time}")
 
-        # Always record every step first — including the final model_output
-        for step in response.steps:
-            add_to_session_history(session_id, step.model_dump())
-
-        tool_calls = [step for step in response.steps if step.type == "function_call"]
+        response_message = response.choices[0].message
+        tool_calls = response_message.tool_calls
+        
         if not tool_calls:
-            agent_final_response = response.output_text
+            agent_final_response = response_message.content
             break
+        
+        messages.append(response_message)
+        for tool_call in tool_calls:
+            function_name = tool_call.function.name
+            function_args = json.loads(tool_call.function.arguments)
+            function_response = json.dumps(execute_tool(function_name, **function_args))
+            messages.append(
+                    {
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": function_response,
+                    }
+            )
 
-        for step in tool_calls:
-            try:
-                tool_result = execute_tool(step.name, **step.arguments)
-                result_text = json.dumps(tool_result, default=str)
-            except Exception as e:
-                result_text = json.dumps({"error": str(e)})
-
-            add_to_session_history(session_id, {
-                "type": "function_result",
-                "name": step.name,
-                "call_id": step.id,
-                "result": [{"type": "text", "text": result_text}],
-            })
-
-        agent_final_response = response.output_text
-
+        agent_final_response = response_message.content
+    add_to_session_history(session_id, {
+        'role':'assistant',
+        'content': agent_final_response,
+    })
     return agent_final_response

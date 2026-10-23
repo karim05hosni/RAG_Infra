@@ -20,10 +20,13 @@ def embed_text(chunks: list[str]) -> list[float]:
             print(f"Error connecting to Ollama server: {e}")
             raise e
         try:
+            ollama_embed_start_time = time.time()
             response = ollama_client.embed(
                 model='bge-m3',
                 input=chunks
             )
+            ollama_embed_end_time = time.time()
+            print(f"Ollama embed call duration: {ollama_embed_end_time - ollama_embed_start_time} seconds")
             print(f"Embedding res: {len(response.embeddings[0])}")
             break  # Exit the retry loop if successful
         except ollama._types.ResponseError as e:
