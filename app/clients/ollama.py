@@ -2,9 +2,12 @@ import time
 
 from ollama import Client, EmbedResponse
 import ollama
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
-
-ollama_client = Client(host='http://192.168.1.9:11434')
+ollama_client = Client(host=os.getenv("Ollama_url"))
+print(f"Connected to Ollama server at {os.getenv('Ollama_url')}")
 
 def embed_text(chunks: list[str]) -> list[float]:
     max_retries = 3

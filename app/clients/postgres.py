@@ -20,9 +20,12 @@ from contextlib import contextmanager
 
 import psycopg
 from psycopg_pool import ConnectionPool
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 _pool: ConnectionPool | None = None
-
 
 def init_pool(min_size: int = 2, max_size: int = 10) -> None:
     """Create the pool. Call once at app startup."""
@@ -30,7 +33,8 @@ def init_pool(min_size: int = 2, max_size: int = 10) -> None:
     if _pool is not None:
         return  # already initialized, don't double-open
 
-    conninfo = 'postgresql://postgres:0000@localhost:5432/my_rag'
+    conninfo = os.getenv("POSTGRES_URL")
+    print(f"Initializing Postgres connection pool with conninfo: {conninfo}")
     if not conninfo:
         raise RuntimeError(
             "DATABASE_URL env var is not set. "

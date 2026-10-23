@@ -1,5 +1,7 @@
 import json
 
+from litellm import timeout
+
 from app.retrieval import hybrid_search
 from google import genai
 from dotenv import load_dotenv
@@ -10,6 +12,7 @@ from app.retrieval.service import get_chunks_in_index_range_by_source
 from app.shared.session_manager import add_to_session_history, create_session, get_session_history
 from app.shared.session_manager import session_exists
 import litellm
+import time
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -119,57 +122,87 @@ genAi_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 - call the LLM with the chat list and tools
 """
 
+
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+
+def call_llm_with_tools(model, messages, tools, retries=2, timeout=20):
+    for attempt in range(retries):
+        try:
+            return litellm.completion(
+                model=model,
+                messages=messages,
+                tools=tools,
+                timeout=timeout,
+            )
+        except Exception as e:
+            print(f"LLM call to {model} failed (attempt {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                wait_seconds = 2 ** attempt  # 1s, 2s, 4s, ...
+                print(f"Retrying in {wait_seconds}s...")
+                time.sleep(wait_seconds)
+    return None
+
+
 def agent_loop(prompt, session_id, max_iterations=5):
     if not session_exists(session_id):
         create_session(session_id)
 
-    add_to_session_history(session_id, {
-        "role": "user",
-        "content": prompt
-    })
-    
+    add_to_session_history(session_id, {"role": "user", "content": prompt})
 
-    agent_final_response = None
-    messages: list = [
-            {"role": "system", "content": system_instructions},
-            *get_session_history(session_id),
+    messages = [
+        {"role": "system", "content": system_instructions},
+        *get_session_history(session_id),
     ]
-    for iteration in range(max_iterations):
-        print(f"Agent loop iteration {iteration + 1}/{max_iterations} for session {session_id}")
 
-        llm_call_start_time = datetime.now()
-        response =litellm.completion(
-            model='gemini/' + os.getenv("GEMINI_MODEL"),
-            messages=messages,
-            tools=tools
-        )
-        llm_call_end_time = datetime.now()
-        print(f"LLM call duration: {llm_call_end_time - llm_call_start_time}")
+    model = os.getenv("ALTERNATIVE_LLM_MODEL")
+
+    for iteration in range(max_iterations):
+        print(f"Agent loop iteration {iteration + 1}/{max_iterations} (session {session_id}, model {model})")
+
+        start_time = datetime.now()
+        response = call_llm_with_tools(model, messages, tools)
+        print(f"LLM call response: {response}")
+        if response is None and iteration == 0:
+            model = "gemini/" + os.getenv("GEMINI_MODEL") 
+            print(f"Primary model unavailable, switching to {model} for this run")
+            response = call_llm_with_tools(model, messages, tools)
+
+        if response is None:
+            final_answer = "Sorry, I'm having trouble responding right now — please try again shortly."
+            add_to_session_history(session_id, {"role": "assistant", "content": final_answer})
+            return final_answer
+
+        print(f"LLM call took {datetime.now() - start_time}")
 
         response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-        
-        if not tool_calls:
-            agent_final_response = response_message.content
-            break
-        
+
         messages.append(response_message)
+        print(f"LLM response: {response_message}")
+        add_to_session_history(session_id, response_message)
+
+        tool_calls = response_message.tool_calls
+        if not tool_calls:
+            return response_message.content
+
         for tool_call in tool_calls:
             function_name = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
-            function_response = json.dumps(execute_tool(function_name, **function_args))
-            messages.append(
-                    {
-                        "tool_call_id": tool_call.id,
-                        "role": "tool",
-                        "name": function_name,
-                        "content": function_response,
-                    }
-            )
+            function_result = json.dumps(execute_tool(function_name, **function_args))
 
-        agent_final_response = response_message.content
-    add_to_session_history(session_id, {
-        'role':'assistant',
-        'content': agent_final_response,
-    })
-    return agent_final_response
+            tool_result_message = {
+                "tool_call_id": tool_call.id,
+                "role": "tool",
+                "name": function_name,
+                "content": function_result,
+            }
+            print(f"Tool result: {tool_result_message}")
+            messages.append(tool_result_message)
+            add_to_session_history(session_id, tool_result_message)
+
+    final_answer = "I wasn't able to finish that request in time — could you rephrase or simplify it?"
+    add_to_session_history(session_id, {"role": "assistant", "content": final_answer})
+    return final_answer
