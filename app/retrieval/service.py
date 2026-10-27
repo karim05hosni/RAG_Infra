@@ -22,32 +22,27 @@ def detect_search_language(prompt):
     lang, score = langid.classify(cleaned_prompt)
     return lang
 
-def keywordSearch(query, language, top_k=50):
+def keywordSearch(query, language, top_k=40):
     keyword_search_results: list[dict] = []
     ts_rank = text_search_ts_rank(query, language, top_k)
     keyword_search_results = ts_rank
     return keyword_search_results
 
-def semantic_search(query, top_k=50):
-    # query_embedding = transformer.embedding_model.encode(query, normalize_embeddings=True)
-    query_embedding = embed_text([query])[0]
-    qdrant_results = qdrant_search(query_embedding, top_k=70).points
-    dot_product_scores: list[tuple[str, float]] = sorted([(result.payload['chunk_id'], result.score) for result in qdrant_results], key=lambda x: x[1], reverse=True)
-    chunk_ids = [chunk_id for chunk_id, score in dot_product_scores]
-    chunks = fetch_chunks_by_ids(chunk_ids)
-    chunks_scores: list[dict] = []
-    chunk_lookup = {str(chunk['chunk_id']): chunk for chunk in chunks}
-    for chunk_id, score in dot_product_scores:
-        chunk_data = chunk_lookup.get(str(chunk_id))
-        if chunk_data:
-            chunks_scores.append({
-                "chunk_id": chunk_id,
-                "score": score,
-                "chunk_data": chunk_data
-            })
+def semantic_search(query, top_k=40):
+    query_embedding = embed_text([query], model='bge-m3', runtime='sentence-transformers')[0]
+    qdrant_results = qdrant_search(query_embedding, top_k).points
+    print(f"Retrieved {len(qdrant_results)} results from Qdrant for query: {query}")
+    chunks_scores = []
+    for result in qdrant_results:
+        chunk_id = result.id
+        score = result.score
+        chunks_scores.append({
+            'chunk_id': chunk_id,
+            'score': score
+        })
     return chunks_scores
 
-def RRF(keyword_search_scores: list[dict], keyword_search_scores_translated: list[dict], semantic_search_scores: list[dict], k=60, w_kw=1.0, w_sem=1.0, w_translated_kw=1.0, top_k=40):
+def RRF(keyword_search_scores: list[dict], keyword_search_scores_translated: list[dict], semantic_search_scores: list[dict], k=60, w_kw=1.0, w_sem=1.0, w_translated_kw=1.0, top_k=25):
     fused_scores = {}
     counter = 0
     for doc in keyword_search_scores:

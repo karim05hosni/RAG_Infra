@@ -2,9 +2,9 @@ import os
 import secrets
 from typing import Annotated, List
 from app import retrieval
-from app.eval import service as eval_service
-from app.eval import evaluations
-from app.eval.golden_dataset import add_eval_dataset, get_eval_dataset, pick_chunks_sample
+# from app.eval import service as eval_service
+# from app.eval import evaluations
+# from app.eval.golden_dataset import add_eval_dataset, get_eval_dataset, pick_chunks_sample
 from contextlib import asynccontextmanager
 
 from app.shared import helpers
@@ -94,40 +94,40 @@ def agent(request: Request, sessionId: str, response: Response, prompt: str = Bo
     result = agent_loop(prompt, sessionId, 10)
     return {"response": result}
 
-@app.get("/eval")
-def eval(num_samples_per_source: int = 5):
-    sampled_chunks = pick_chunks_sample(num_samples_per_source)
-    print(f"Sampled Chunks: {sampled_chunks}")
-    return sampled_chunks
+# @app.get("/eval")
+# def eval(num_samples_per_source: int = 5):
+#     sampled_chunks = pick_chunks_sample(num_samples_per_source)
+#     print(f"Sampled Chunks: {sampled_chunks}")
+#     return sampled_chunks
 
 @app.post("/eval/add")
 def add_eval_dataset(eval_data: list[dict] = Body(..., embed=True)):
     inserted = add_eval_dataset(eval_data)
     return {"inserted": inserted}
 
-@app.get("/eval/get")
-def eval_dataset(limit: int = 10):
-    return get_eval_dataset(limit)
+# @app.get("/eval/get")
+# def eval_dataset(limit: int = 10):
+#     return get_eval_dataset(limit)
 
-@app.post("/eval/generate")
-def generate_eval_dataset(jobId: str = None):
-    return eval_service.generate_eval_dataset(jobId=jobId)
+# @app.post("/eval/generate")
+# def generate_eval_dataset(jobId: str = None):
+#     return eval_service.generate_eval_dataset(jobId=jobId)
 
-@app.get("/get-neighbor-chunks")
-def get_neighbor_chunks(chunk_id: str, num_neighbors: int = 2):
-    return retrieval.get_neighboring_chunks(chunk_id, num_neighbors)
+# @app.get("/get-neighbor-chunks")
+# def get_neighbor_chunks(chunk_id: str, num_neighbors: int = 2):
+#     return retrieval.get_neighboring_chunks(chunk_id, num_neighbors)
 
-@app.get("/extract-claims")
-def get_claims(text):
-    return evaluations.extract_claims(text)
+# @app.get("/extract-claims")
+# def get_claims(text):
+#     return evaluations.extract_claims(text)
 
-@app.get("/test-ollama-connection")
-def test_ollama_connection():
-    evaluations.test_ollama_connection()
+# @app.get("/test-ollama-connection")
+# def test_ollama_connection():
+#     evaluations.test_ollama_connection()
 
-@app.post("/test-faithfulness")
-def test_faithfulness(llm_answer: str = Body(...), retrieved_chunks: list[str] = Body(...)):
-    return evaluations.faithfulness(llm_answer, retrieved_chunks)
+# @app.post("/test-faithfulness")
+# def test_faithfulness(llm_answer: str = Body(...), retrieved_chunks: list[str] = Body(...)):
+#     return evaluations.faithfulness(llm_answer, retrieved_chunks)
 
 @app.get("/reembedd-chunks")
 def reembedd_chunks(embedding_model: str):

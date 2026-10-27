@@ -1,3 +1,3 @@
-from .transformer import embedding_model
+from .transformer import sentence_transformer_embedding_models, en_to_fr_translation_model, en_to_fr_tokenizer, fr_to_en_translation_model, fr_to_en_tokenizer, nli_model
 from .helpers import generate_doc_id, generate_chunk_id, split_list_by_max_bytes, sanitize_fr_text
 from .session_manager import session_exists, create_session, session_store, get_session_history, add_to_session_history

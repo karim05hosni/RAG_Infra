@@ -158,7 +158,7 @@ def agent_loop(prompt, session_id, max_iterations=5):
         *get_session_history(session_id),
     ]
 
-    model = os.getenv("ALTERNATIVE_LLM_MODEL")
+    model = os.getenv("GEMINI_MODEL")
 
     for iteration in range(max_iterations):
         print(f"Agent loop iteration {iteration + 1}/{max_iterations} (session {session_id}, model {model})")
@@ -167,7 +167,7 @@ def agent_loop(prompt, session_id, max_iterations=5):
         response = call_llm_with_tools(model, messages, tools)
         print(f"LLM call response: {response}")
         if response is None and iteration == 0:
-            model = "gemini/" + os.getenv("GEMINI_MODEL") 
+            model = os.getenv("ALTERNATIVE_LLM") 
             print(f"Primary model unavailable, switching to {model} for this run")
             response = call_llm_with_tools(model, messages, tools)
 

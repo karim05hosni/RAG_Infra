@@ -6,7 +6,7 @@ from qdrant_client.models import PointStruct, Modifier, VectorParams, SparseVect
 
 load_dotenv()  # Load environment variables from .env file
 # Connect to your local Docker container
-qdrant_client = QdrantClient(url=os.getenv('qdrant_url')) 
+qdrant_client = QdrantClient(url=os.getenv('QDRANT_URL'), api_key=os.getenv('QDRANT_API_KEY')) 
 collection_name = "my_rag"
 
 def delete_all_collections():
@@ -14,15 +14,7 @@ def delete_all_collections():
     for collection in collections:
         print(f"Deleting collection: {collection.name}")
         qdrant_client.delete_collection(collection.name)
-# delete_all_collections()
 
-# if not qdrant_client.collection_exists(collection_name):
-#     print(f"Creating collection '{collection_name}' with vector size 1024 .")
-#     qdrant_client.create_collection(
-#         collection_name=collection_name,
-#         vectors_config=VectorParams(size=1024, distance=Distance.DOT)
-#     )
-    
 def create_collection(collection_name: str, vector_size: int = 1024):
     if not qdrant_client.collection_exists(collection_name):
         print(f"Creating collection '{collection_name}' with vector size {vector_size}.")

@@ -45,7 +45,10 @@ def init_pool(min_size: int = 2, max_size: int = 10) -> None:
         conninfo=conninfo,
         min_size=min_size,
         max_size=max_size,
+        reconnect_failed=True,
         open=True,
+        check=ConnectionPool.check_connection,
+        max_idle=300
     )
 
 
@@ -75,4 +78,3 @@ def get_conn() -> psycopg.Connection:
         )
     with _pool.connection() as conn:
         yield conn
-        

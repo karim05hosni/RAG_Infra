@@ -8,7 +8,7 @@ from app.shared.helpers import sanitize_fr_text
 
 from .readers import read_pdf, read_docx, read_txt, transcribe_video, validate_video_file
 import os
-from app.shared import generate_doc_id, generate_chunk_id, split_list_by_max_bytes, embedding_model
+from app.shared import generate_doc_id, generate_chunk_id, split_list_by_max_bytes
 from app.repositories import add_to_qdrant
 from .chunker import chunk_text, chunk_video_transcription
 from sentence_transformers import SentenceTransformer

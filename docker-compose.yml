@@ -1,0 +1,82 @@
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database (Relational metadata + Full-Text Search)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17
+    container_name: rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-rag_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Qdrant Vector Database (Vector embeddings & similarity search)
+  # Dashboard available at: http://localhost:6333/dashboard
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333" # HTTP REST API & Web Dashboard
+      - "6334:6334" # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # ---------------------------------------------------------------------------
+  # Ollama Server (Local LLMs & Embedding Models)
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Helper Service: Automatically pull the 'bge-m3' model into Ollama
+  # Exits automatically once downloaded. Re-runs check in ~1s if cached.
+  # ---------------------------------------------------------------------------
+  ollama-pull-model:
+    image: ollama/ollama:latest
+    container_name: rag-ollama-pull
+    restart: "no"
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "echo '==> Checking/pulling bge-m3 embedding model in Ollama...';
+       ollama pull bge-m3;
+       echo '==> bge-m3 model is ready!';
+       exit 0;"
+
+volumes:
+  postgres_data:
+    name: rag_postgres_data
+  qdrant_data:
+    name: rag_qdrant_data
+  ollama_data:
+    name: rag_ollama_data
